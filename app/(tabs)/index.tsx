@@ -1,19 +1,64 @@
-import { Stack } from 'expo-router';
-import { useState } from 'react';
-
+import { Stack, useLocalSearchParams } from 'expo-router';
+import { useState, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FlatList, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 
 import { ScreenContent } from '~/components/ScreenContent';
 
+// Add to your app for URL scheme handling
+import * as Linking from 'expo-linking';
+
 export default function Home() {
+  const { clipboardData } = useLocalSearchParams<{ clipboardData?: string }>();
   const [copied, setCopied] = useState<boolean | null>(null);
+  const [clipboardHistory, setClipboardHistory] = useState<string[]>([]);
 
   const handleCopy = async (item: string) => {
     await Clipboard.setStringAsync(item);
     setCopied(true);
     setTimeout(() => setCopied(false), 1000);
+    console.log('Copied to clipboard:', item);
+
   }
+
+  useEffect(() => {
+    console.log('🔍 Current clipboardHistory:', clipboardHistory);
+  }, [clipboardHistory]);
+
+  useEffect(() => {
+    // Handle URL params passed from router
+    if (clipboardData) {
+      setClipboardHistory((prevHistory) => [clipboardData, ...prevHistory]);
+    }
+
+    // Handle URLs directly with Linking API
+    const handleURL = (event: { url: string }) => {
+      const { url } = event;
+      if (url.startsWith('clipboard://(tabs)?data=')) {
+        const clipboardText = decodeURIComponent(url.split('data=')[1]);
+        setClipboardHistory((prevHistory) => {
+          const newHistory = [clipboardText, ...prevHistory];
+          return newHistory;
+        });
+      } else {
+        console.log('❌ URL pattern did not match');
+      }
+    };
+
+    // Handle initial URL (when app is launched via URL scheme)
+    const getInitialURL = async () => {
+      const initialUrl = await Linking.getInitialURL();
+      if (initialUrl && initialUrl.startsWith('clipboard://(tabs)?data=')) {
+        handleURL({ url: initialUrl });
+      }
+    };
+
+    getInitialURL();
+    const subscription = Linking.addEventListener('url', handleURL);
+    return () => subscription.remove();
+  }, [clipboardData]);
+
   return (
     <>
       <Stack.Screen options={{ title: 'Clipboard History' }} />
@@ -27,7 +72,8 @@ export default function Home() {
             </View>
           )}
           <FlatList
-            data={["Ceci est le texte 1", "Ceci est le texte 2", "Ceci est le texte 3", "Ceci est le texte 4", "Ceci est le texte 5"]}
+            data={clipboardHistory}
+            keyExtractor={(item, index) => `${item}-${index}`}
             renderItem={({ item }) => (
               <View className='flex-row justify-between border-b border-gray-300 pt-4 pb-4'>
                 <View className='justify-center pl-6 flex-1'>
