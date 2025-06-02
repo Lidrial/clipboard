@@ -6,13 +6,62 @@ import * as Clipboard from 'expo-clipboard';
 
 import { ScreenContent } from '~/components/ScreenContent';
 
-// Add to your app for URL scheme handling
 import * as Linking from 'expo-linking';
+
+import { ClipboardItem } from '~/components/ClipboardItem';
+import { CopiedNotification } from '~/components/CopiedNotification';
+import { SaveClipboardButton } from '~/components/SaveClipboardButton';
+import { ClipBoardList } from '~/components/ClipboardList';
+import { PaywallModal } from '~/components/PaywallModal';
 
 export default function Home() {
   const { clipboardData } = useLocalSearchParams<{ clipboardData?: string }>();
-  const [copied, setCopied] = useState<boolean | null>(null);
+  const [copied, setCopied] = useState<boolean>(false);
   const [clipboardHistory, setClipboardHistory] = useState<string[]>([]);
+
+  const [isPremium, setIsPremium] = useState<boolean>(false);
+  const [showPaywall, setShowPaywall] = useState<boolean>(false);
+
+  const FREE_LIMIT = 5; // Maximum items for free users
+
+  const STORAGE_KEY = 'clipboard-history'
+
+  const saveCurrentClipboard = async () => {
+    try {
+      const currentClipboard = await Clipboard.getStringAsync();
+
+      // Check if clipboard is empty
+      if (!currentClipboard || currentClipboard.trim() === '') {
+        console.log('❌ Clipboard is empty or contains only whitespace');
+        return;
+      }
+
+      // Check for duplicates
+      if (clipboardHistory.includes(currentClipboard.trim())) {
+        console.log('📋 Item already exists:', currentClipboard);
+        return;
+      }
+
+      let newHistory;
+
+      // Check if user is at free limit
+      if (!isPremium && clipboardHistory.length >= FREE_LIMIT) {
+        // Auto-delete oldest item (keep newest 4 + add new one = 5 total)
+        newHistory = [currentClipboard.trim(), ...clipboardHistory.slice(0, FREE_LIMIT - 1)];
+        setShowPaywall(true);
+        console.log('💾 Free limit reached - auto-deleting oldest item');
+      } else {
+        // Normal save (under limit or premium user)
+        newHistory = [currentClipboard.trim(), ...clipboardHistory];
+      }
+
+      console.log('💾 Saving clipboard:', currentClipboard);
+      setClipboardHistory(newHistory);  // Use newHistory, not the old logic!
+
+    } catch (error) {
+      console.error('❌ Error getting clipboard content:', error);
+    }
+  };
 
   const handleCopy = async (item: string) => {
     await Clipboard.setStringAsync(item);
@@ -20,6 +69,48 @@ export default function Home() {
     setTimeout(() => setCopied(false), 1000);
     console.log('Copied to clipboard:', item);
 
+  }
+
+  const handleDelete = (index: number) => {
+    setClipboardHistory((prevHistory) => prevHistory.filter((_, i) => i !== index))
+  }
+
+  const handleUpgrade = () => {
+    console.log('User wants to upgrade to premium!');
+    alert('Premium upgrade comming soon!');
+    setShowPaywall(false);
+  }
+
+  const handlePaywallClose = () => {
+    console.log('Paywall closed');
+    setShowPaywall(false);
+  }
+
+  const saveToStorage = async (history: string[]) => {
+    try {
+      const jsonData = JSON.stringify(history);
+      await AsyncStorage.setItem(STORAGE_KEY, jsonData);
+      console.log('💾 Saved to storage:', history.length, 'items');
+
+    } catch (error) {
+      console.log('❌ Error saving to storage:', error);
+
+    }
+  }
+
+  const loadFromStorage = async () => {
+    try {
+      const jsonData = await AsyncStorage.getItem(STORAGE_KEY)
+      if (jsonData) {
+        const history = JSON.parse(jsonData)
+        console.log('📂 Loaded from storage:', history.length, 'items');
+        return history
+      }
+      return []; //return empty array if no data
+    } catch (error) {
+      console.log('❌ Error loading from storage:', error);
+      return []; //return empty array on error
+    }
   }
 
   useEffect(() => {
@@ -37,12 +128,7 @@ export default function Home() {
       const { url } = event;
       if (url.startsWith('clipboard://(tabs)?data=')) {
         const clipboardText = decodeURIComponent(url.split('data=')[1]);
-        setClipboardHistory((prevHistory) => {
-          const newHistory = [clipboardText, ...prevHistory];
-          return newHistory;
-        });
-      } else {
-        console.log('❌ URL pattern did not match');
+        setClipboardHistory((prevHistory) => [clipboardText, ...prevHistory]);
       }
     };
 
@@ -59,57 +145,50 @@ export default function Home() {
     return () => subscription.remove();
   }, [clipboardData]);
 
+  useEffect(() => {
+    // Load clipboard history from storage on mount
+    const loadHistory = async () => {
+      console.log('🔄 Loading clipboard from storage...')
+      const savedhistory = await loadFromStorage();
+      setClipboardHistory(savedhistory);
+      console.log('📂 Loaded history:', savedhistory.length, 'items from storage');
+    }
+    loadHistory();
+  }, []);
+
+  useEffect(() => {
+    // Save clipboard history to storage whenever it changes
+    if (clipboardHistory.length > 0) {
+      console.log('💾 Saving', clipboardHistory.length, 'items to storage...');
+      saveToStorage(clipboardHistory);
+    }
+  }, [clipboardHistory]);
+
   return (
     <>
       <Stack.Screen options={{ title: 'Clipboard History' }} />
-      <View className='w-full h-full'>
-        <View className='flex-1 bg-gray-50'>
-          {copied && (
-            <View className='absolute top-1/2 right-0 left-0 z-10 items-center justify-center'>
-              <Text className='text-center text-white bg-gray-600 p-4 rounded-lg'>
-                Copied !
-              </Text>
-            </View>
-          )}
-          <FlatList
-            data={clipboardHistory}
-            keyExtractor={(item, index) => `${item}-${index}`}
-            renderItem={({ item }) => (
-              <View className='flex-row justify-between border-b border-gray-300 pt-4 pb-4'>
-                <View className='justify-center pl-6 flex-1'>
-                  <TouchableOpacity onPress={() => handleCopy(item)}>
-                    <Text>{item}</Text>
-                  </TouchableOpacity>
-                </View>
-                <View className='flex-row w-1/3 justify-evenly'>
-                  <View className='h-16 w-px -my-2 bg-gray-200'></View>
-                  {(() => {
-                    const date = new Date();
-                    const [day, month, year] = date.toLocaleDateString('fr-FR').split('/');
-                    const time = date.toLocaleTimeString('fr-FR');
-                    return (
-                      <View className="items-center justify-center">
-                        <Text className='text-center'>
-                          {`${day}/${month}/${year}`}
-                          {'\n'}
-                          {time}
-                        </Text>
-                      </View>
-                    );
-                  })()}
-                </View>
-              </View>
-            )}>
-          </FlatList >
-        </View >
-      </View >
+
+      {/* Manual Save Button */}
+      <SaveClipboardButton
+        onPress={saveCurrentClipboard}
+        itemCount={clipboardHistory.length}
+        maxItems={isPremium ? undefined : FREE_LIMIT}
+      />
+
+      <ClipBoardList
+        data={clipboardHistory}
+        onCopy={handleCopy}
+        onDelete={isPremium ? handleDelete : undefined}
+      />
+
+      <CopiedNotification isVisible={copied} />
+
+      <PaywallModal
+        isVisible={showPaywall}
+        onClose={handlePaywallClose}
+        onUpgrade={handleUpgrade}
+      />
     </>
   );
-}
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 24,
-  },
-});
+}
